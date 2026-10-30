@@ -1,137 +1,145 @@
+"""Load the demo network using the application's schema and database path."""
+
+import argparse
 import csv
-import os
+import math
 import sqlite3
+import sys
+from contextlib import closing
+from pathlib import Path
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-LOCATIONS_CSV = os.path.join(DATA_DIR, "locations.csv")
-ROADS_CSV = os.path.join(DATA_DIR, "roads.csv")
+# Support both python scripts/seed_data.py and python -m scripts.seed_data.
+BASE_DIR = Path(__file__).resolve().parents[1]
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
-# مسار قاعدة البيانات
-DB_PATH = os.path.join(BASE_DIR, "backend", "routewise.db")
-if not os.path.exists(os.path.join(BASE_DIR, "backend")):
-    DB_PATH = os.path.join(BASE_DIR, "routewise.db")
+from backend.database.connection import DB_PATH, SCHEMA_PATH
+
+LOCATIONS_CSV = BASE_DIR / "data" / "locations.csv"
+ROADS_CSV = BASE_DIR / "data" / "roads.csv"
 
 
 def get_connection(db_path=DB_PATH):
-    conn = sqlite3.connect(db_path)
-    conn.execute("PRAGMA foreign_keys = ON;")
+    path = Path(db_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
 def init_schema(conn):
-    schema_sql = """
-    CREATE TABLE IF NOT EXISTS locations (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE NOT NULL,
-        name TEXT NOT NULL,
-        kind TEXT NOT NULL CHECK(kind IN ('DEPOT', 'HUB', 'CUSTOMER')),
-        x REAL NOT NULL CHECK(x BETWEEN 0 AND 1000),
-        y REAL NOT NULL CHECK(y BETWEEN 0 AND 1000)
-    );
-
-    CREATE TABLE IF NOT EXISTS roads (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        from_id INTEGER NOT NULL,
-        to_id INTEGER NOT NULL,
-        distance_km REAL NOT NULL CHECK(distance_km > 0),
-        is_one_way INTEGER NOT NULL DEFAULT 0,
-        is_closed INTEGER NOT NULL DEFAULT 0,
-        FOREIGN KEY (from_id) REFERENCES locations(id) ON DELETE RESTRICT,
-        FOREIGN KEY (to_id) REFERENCES locations(id) ON DELETE RESTRICT,
-        CHECK(from_id <> to_id),
-        UNIQUE(from_id, to_id)
-    );
-
-    CREATE TABLE IF NOT EXISTS routes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        created_at TEXT NOT NULL,
-        mode TEXT NOT NULL CHECK(mode IN ('POINT', 'RUN')),
-        origin_id INTEGER NOT NULL,
-        total_km REAL NOT NULL,
-        avg_speed_kmh REAL NOT NULL,
-        FOREIGN KEY (origin_id) REFERENCES locations(id)
-    );
-
-    CREATE TABLE IF NOT EXISTS route_legs (
-        route_id INTEGER NOT NULL,
-        seq INTEGER NOT NULL,
-        from_id INTEGER NOT NULL,
-        to_id INTEGER NOT NULL,
-        km REAL NOT NULL,
-        PRIMARY KEY (route_id, seq),
-        FOREIGN KEY (route_id) REFERENCES routes(id) ON DELETE CASCADE
-    );
-    """
-    conn.executescript(schema_sql)
-    conn.commit()
+    conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
-def seed_database(db_path=DB_PATH):
-    conn = get_connection(db_path)
-    init_schema(conn)
-    cursor = conn.cursor()
-
-    # تفريغ البيانات القديمة
-    cursor.execute("DELETE FROM route_legs;")
-    cursor.execute("DELETE FROM routes;")
-    cursor.execute("DELETE FROM roads;")
-    cursor.execute("DELETE FROM locations;")
-    conn.commit()
-
-    # 1. إدخال المواقع
-    loc_code_to_id = {}
-    with open(LOCATIONS_CSV, mode="r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
+def _read_rows(path, columns):
+    with Path(path).open(newline="", encoding="utf-8-sig") as source:
+        reader = csv.DictReader(source)
+        missing = set(columns) - set(reader.fieldnames or [])
+        if missing:
+            raise ValueError(f"{path}: missing columns: {', '.join(sorted(missing))}")
         for row in reader:
-            cursor.execute(
-                """
-                INSERT INTO locations (code, name, kind, x, y)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (row["code"], row["name"], row["kind"], float(row["x"]), float(row["y"]))
-            )
-            loc_code_to_id[row["code"]] = cursor.lastrowid
+            line = reader.line_num
+            if None in row or any(not (row.get(key) or "").strip() for key in columns):
+                raise ValueError(f"{path}: row {line}: missing values or extra fields")
+            yield line, {key: row[key].strip() for key in columns}
 
-    print(f"✓ Inserted {len(loc_code_to_id)} locations.")
 
-    # 2. إدخال الطرق
-    inserted_roads = 0
-    with open(ROADS_CSV, mode="r", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            from_code = row["from_code"]
-            to_code = row["to_code"]
+def _number(value, minimum, maximum, field):
+    number = float(value)
+    if not math.isfinite(number) or not minimum <= number <= maximum:
+        raise ValueError(f"{field} must be finite and between {minimum} and {maximum}")
+    return number
 
-            if from_code not in loc_code_to_id or to_code not in loc_code_to_id:
-                continue
 
-            u = loc_code_to_id[from_code]
-            v = loc_code_to_id[to_code]
-            is_one_way = int(row["is_one_way"])
-            is_closed = int(row["is_closed"])
-            dist = float(row["distance_km"])
+def _load_sample(locations_csv, roads_csv):
+    locations, roads, codes, pairs = [], [], set(), {}
+    for line, row in _read_rows(locations_csv, ("code", "name", "kind", "x", "y")):
+        try:
+            code = row["code"]
+            # Match SQLite's ASCII-only NOCASE collation.
+            key = code.translate(str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz"))
+            if key in codes:
+                raise ValueError(f"duplicate location code: {code}")
+            if row["kind"] not in {"DEPOT", "HUB", "CUSTOMER"}:
+                raise ValueError("kind must be DEPOT, HUB or CUSTOMER")
+            x = _number(row["x"], 0, 1000, "x")
+            y = _number(row["y"], 0, 1000, "y")
+            locations.append((code, row["name"], row["kind"], x, y))
+            codes.add(key)
+        except ValueError as exc:
+            raise ValueError(f"{locations_csv}: row {line}: {exc}") from exc
+    known_codes = {location[0] for location in locations}
+    for line, row in _read_rows(roads_csv, ("from_code", "to_code", "distance_km", "is_one_way", "is_closed")):
+        try:
+            start, end = row["from_code"], row["to_code"]
+            if start not in known_codes or end not in known_codes:
+                raise ValueError(f"unknown location code: {start} -> {end}")
+            if start == end:
+                raise ValueError("a road cannot connect a location to itself")
+            if row["is_one_way"] not in {"0", "1"} or row["is_closed"] not in {"0", "1"}:
+                raise ValueError("road flags must be 0 or 1")
+            distance = _number(row["distance_km"], 0, 500, "distance_km")
+            if distance == 0:
+                raise ValueError("distance_km must be greater than zero")
+            one_way, closed = int(row["is_one_way"]), int(row["is_closed"])
+            pair = tuple(sorted((start, end)))
+            directions = pairs.setdefault(pair, set())
+            direction = (start, end)
+            if directions and (not one_way or None in directions or direction in directions):
+                raise ValueError(f"duplicate or conflicting road: {start} -> {end}")
+            directions.add(direction if one_way else None)
+            roads.append((line, start, end, distance, one_way, closed))
+        except ValueError as exc:
+            raise ValueError(f"{roads_csv}: row {line}: {exc}") from exc
+    if not locations or not roads:
+        raise ValueError("Sample CSV files must contain locations and roads")
+    return locations, roads
 
-            if is_one_way == 0 and u > v:
-                u, v = v, u
 
-            try:
-                cursor.execute(
-                    """
-                    INSERT INTO roads (from_id, to_id, distance_km, is_one_way, is_closed)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (u, v, dist, is_one_way, is_closed)
+def seed_database(db_path=DB_PATH, *, locations_csv=None, roads_csv=None):
+    locations_csv = LOCATIONS_CSV if locations_csv is None else locations_csv
+    roads_csv = ROADS_CSV if roads_csv is None else roads_csv
+    # Validate all input before opening or changing the target database.
+    locations, roads = _load_sample(locations_csv, roads_csv)
+    with closing(get_connection(db_path)) as conn:
+        init_schema(conn)
+        with conn:
+            conn.execute("DELETE FROM route_legs")
+            conn.execute("DELETE FROM routes")
+            conn.execute("DELETE FROM roads")
+            conn.execute("DELETE FROM locations")
+            ids = {}
+            for location in locations:
+                cursor = conn.execute(
+                    "INSERT INTO locations (code, name, kind, x, y) VALUES (?, ?, ?, ?, ?)", location
                 )
-                inserted_roads += 1
-            except sqlite3.IntegrityError:
-                pass
+                ids[location[0]] = cursor.lastrowid
+            for line, start, end, distance, one_way, closed in roads:
+                u, v = ids[start], ids[end]
+                if not one_way and u > v:
+                    u, v = v, u
+                try:
+                    conn.execute(
+                        "INSERT INTO roads (from_id, to_id, distance_km, is_one_way, is_closed) VALUES (?, ?, ?, ?, ?)",
+                        (u, v, distance, one_way, closed),
+                    )
+                except sqlite3.IntegrityError as exc:
+                    raise ValueError(f"{roads_csv}: row {line}: {exc}") from exc
+    print(f"Inserted {len(locations)} locations and {len(roads)} roads into {db_path}.")
 
-    conn.commit()
-    print(f"✓ Inserted {inserted_roads} roads.")
-    conn.close()
-    print("Database seeding completed successfully.")
+
+def main():
+    parser = argparse.ArgumentParser(description="Reset the selected database to the sample network.")
+    parser.add_argument("--db", type=Path, default=DB_PATH, help="Target SQLite file")
+    parser.add_argument("--reset", action="store_true", help="Confirm replacement of existing locations, roads and route history")
+    args = parser.parse_args()
+    if not args.reset:
+        parser.error("--reset is required; this replaces data in the selected database")
+    try:
+        seed_database(args.db)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        parser.exit(1, f"Seed failed: {exc}\n")
 
 
 if __name__ == "__main__":
-    seed_database()
+    main()

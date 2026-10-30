@@ -8,14 +8,15 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
-from scripts.seed_data import seed_database, DB_PATH, get_connection
+from scripts.seed_data import seed_database, get_connection
 
 
 @pytest.fixture(scope="module")
-def seeded_db():
+def seeded_db(tmp_path_factory):
     """تشغيل الـ seed قبل الاختبارات للتأكد من وجود البيانات"""
-    seed_database(DB_PATH)
-    conn = get_connection(DB_PATH)
+    db_path = tmp_path_factory.mktemp("sample-data") / "sample.db"
+    seed_database(db_path)
+    conn = get_connection(db_path)
     yield conn
     conn.close()
 
