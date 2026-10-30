@@ -70,6 +70,19 @@ def test_invalid_distances_are_skipped():
     assert build_graph([loc(1), loc(2)], roads) == {1: [], 2: []}
 
 
+def test_overflowing_distances_do_not_interrupt_graph_construction():
+    roads = [
+        road(1, 1, 2, 10**1000),
+        road(2, 1, 2, -(10**1000)),
+        road(3, 1, 2, 4.0),
+    ]
+
+    assert build_graph([loc(1), loc(2)], roads) == {
+        1: [(2, 4.0)],
+        2: [(1, 4.0)],
+    }
+
+
 def test_integer_flags_from_database_are_supported():
     # SQLite stores booleans as 0/1.
     roads = [road(1, 1, 2, 2, one_way=1), road(2, 2, 3, 4, closed=1)]

@@ -24,13 +24,18 @@ Graph = dict[int, list[tuple[int, float]]]
 def _valid_distance(value: Any) -> float | None:
     """Return the distance as a float, or None if it is not usable.
 
-    Valid: a finite, non-negative int/float (bools are rejected).
+    Valid: a finite, non-negative int/float representable as a float
+    (bools are rejected).
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    if not math.isfinite(value) or value < 0:
+    try:
+        distance = float(value)
+    except OverflowError:
         return None
-    return float(value)
+    if not math.isfinite(distance) or distance < 0:
+        return None
+    return distance
 
 
 def build_graph(locations: list[dict], roads: list[dict]) -> Graph:
