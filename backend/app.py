@@ -24,6 +24,8 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
     if test_config is not None:
         app.config.update(test_config)
 
+    if app.config["DB_PATH"] == ":memory:":
+        raise ValueError("Use a SQLite file for DB_PATH; requests open separate connections.")
     initialize_database(app.config["DB_PATH"])
     app.register_blueprint(network_bp)
 

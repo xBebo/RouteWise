@@ -328,3 +328,22 @@ def test_malformed_json_and_not_found_return_json_errors(client):
     missing_road = client.delete("/api/roads/999")
     assert missing_road.status_code == 404
     assert "error" in missing_road.get_json()
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("GET", "/api/roads?location_id=9223372036854775808", None),
+        ("POST", "/api/roads", {"from_id": 2**63, "to_id": 1, "distance_km": 1}),
+        ("PATCH", "/api/locations/9223372036854775808", {"name": "Updated"}),
+        ("DELETE", "/api/roads/9223372036854775808", None),
+    ],
+)
+def test_out_of_range_sqlite_ids_return_bad_request(client, method, path, body):
+    response = client.open(path, method=method, json=body)
+    assert response.status_code == 400
+    assert response.get_json()["error"]
+
+
+def test_app_rejects_in_memory_sqlite():
+    with pytest.raises(ValueError, match="Use a SQLite file"):
+        create_app({"DB_PATH": ":memory:"})

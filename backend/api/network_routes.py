@@ -4,6 +4,7 @@ from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
 
+from backend.database.connection import MAX_SQLITE_ID
 from backend.services.network_service import (
     ConflictError,
     NetworkService,
@@ -37,9 +38,13 @@ def _parse_optional_int_param(name: str) -> int | None:
             f"Query parameter '{name}' must be an integer.",
             fields={name: "Must be a positive integer."},
         ) from exc
-    if value <= 0:
+    return _validate_id(value, name)
+
+
+def _validate_id(value: int, name: str) -> int:
+    if not 1 <= value <= MAX_SQLITE_ID:
         raise ValidationError(
-            f"Query parameter '{name}' must be a positive integer.",
+            f"'{name}' must be a positive SQLite integer.",
             fields={name: "Must be a positive integer."},
         )
     return value
@@ -129,6 +134,7 @@ def create_location():
 
 @network_bp.patch("/locations/<int:location_id>")
 def update_location(location_id: int):
+    _validate_id(location_id, "location_id")
     payload = _parse_json_object()
     updated = _get_service().update_location(location_id, payload)
     return jsonify({"location": _serialize_location(updated)}), 200
@@ -136,6 +142,7 @@ def update_location(location_id: int):
 
 @network_bp.delete("/locations/<int:location_id>")
 def delete_location(location_id: int):
+    _validate_id(location_id, "location_id")
     _get_service().delete_location(location_id)
     return jsonify({"deleted": True, "id": location_id}), 200
 
@@ -163,6 +170,7 @@ def create_road():
 
 @network_bp.patch("/roads/<int:road_id>")
 def update_road(road_id: int):
+    _validate_id(road_id, "road_id")
     payload = _parse_json_object()
     updated = _get_service().update_road(road_id, payload)
     return jsonify({"road": _serialize_road(updated)}), 200
@@ -170,5 +178,6 @@ def update_road(road_id: int):
 
 @network_bp.delete("/roads/<int:road_id>")
 def delete_road(road_id: int):
+    _validate_id(road_id, "road_id")
     _get_service().delete_road(road_id)
     return jsonify({"deleted": True, "id": road_id}), 200

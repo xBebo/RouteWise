@@ -5,6 +5,7 @@ import sqlite3
 from pathlib import Path
 from typing import Any
 
+from backend.database.connection import MAX_SQLITE_ID
 from backend.database.repositories import LocationRepository, RoadRepository
 
 VALID_LOCATION_KINDS = ("DEPOT", "HUB", "CUSTOMER")
@@ -92,8 +93,8 @@ def _require_positive_int(
     field: str,
     errors: dict[str, str],
 ) -> int | None:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        errors[field] = f"{field} must be a positive integer."
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= MAX_SQLITE_ID:
+        errors[field] = f"{field} must be a positive SQLite integer."
         return None
     return value
 

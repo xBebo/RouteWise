@@ -3,6 +3,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[2]
 DB_PATH = BASE_DIR / "data" / "routewise.db"
+MAX_SQLITE_ID = 2**63 - 1
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
