@@ -5,6 +5,7 @@ import { StatusMessage } from './components/StatusMessage.jsx'
 import { hrefFor, useHashRoute } from './hooks/useHashRoute.js'
 import { useNetwork } from './hooks/useNetwork.js'
 import { buildIndex } from './lib/network.js'
+import { NetworkValidation } from './components/NetworkValidation.jsx'
 import { DirectoryPage } from './pages/DirectoryPage.jsx'
 import { NetworkMapPage } from './pages/NetworkMapPage.jsx'
 
@@ -38,9 +39,12 @@ export default function App() {
     // Keep showing the last good data while a reload is in flight.
     content =
       route === 'map' ? (
-        <NetworkMapPage index={index} selection={selection} onSelect={setSelection} />
+        <>
+          <NetworkValidation index={index} />
+          <NetworkMapPage index={index} selection={selection} onSelect={setSelection} />
+        </>
       ) : (
-        <DirectoryPage index={index} onShowOnMap={showOnMap} />
+        <DirectoryPage index={index} onShowOnMap={showOnMap} onChanged={network.retry} />
       )
   } else {
     content = (

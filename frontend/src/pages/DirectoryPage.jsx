@@ -1,3 +1,4 @@
+import { NetworkEditor } from '../components/NetworkEditor.jsx'
 import { useState } from 'react'
 import { DirectionLabel, IsolatedBadge, KindBadge, RoadStatusBadge } from '../components/Badges.jsx'
 import { Button } from '../components/Button.jsx'
@@ -179,7 +180,7 @@ function RoadsView({ index, roads, onShowOnMap }) {
   )
 }
 
-export function DirectoryPage({ index, onShowOnMap }) {
+export function DirectoryPage({ index, onShowOnMap, onChanged }) {
   const [query, setQuery] = useState('')
   const term = query.trim().toLowerCase()
   const matches = (location) =>
@@ -208,6 +209,7 @@ export function DirectoryPage({ index, onShowOnMap }) {
           onChange={setQuery}
           placeholder="Filter by name or code"
         />
+      <NetworkEditor index={index} onChanged={onChanged} />
       </PageHeader>
 
       <div className="mx-auto max-w-6xl space-y-6 p-4 sm:p-6">

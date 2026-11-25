@@ -4,6 +4,8 @@ from typing import Any
 
 from flask import Blueprint, current_app, jsonify, request
 
+from backend.algorithms.graph import build_graph
+from backend.algorithms.network_validation import validate_network
 from backend.database.connection import MAX_SQLITE_ID
 from backend.services.network_service import (
     ConflictError,
@@ -181,3 +183,13 @@ def delete_road(road_id: int):
     _validate_id(road_id, "road_id")
     _get_service().delete_road(road_id)
     return jsonify({"deleted": True, "id": road_id}), 200
+
+
+@network_bp.get("/network/validation")
+def network_validation():
+    depot_id = _parse_optional_int_param("depot_id")
+    service = _get_service()
+    locations = service.list_locations()
+    if not any(loc["id"] == depot_id and loc["kind"] == "DEPOT" for loc in locations):
+        raise ValidationError("Select an existing depot.", fields={"depot_id": "Select an existing depot."})
+    return jsonify(validate_network(build_graph(locations, service.list_roads()), depot_id))
