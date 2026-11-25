@@ -43,3 +43,18 @@ export async function getNetwork(signal) {
   const [locations, roads] = await Promise.all([getLocations(signal), getRoads(signal)])
   return { locations, roads }
 }
+export async function requestNetwork(path, method = 'GET', body) {
+  const response = await fetch('/api/' + path, {
+    method,
+    ...(body === undefined ? {} : {
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }),
+  })
+  const data = await response.json().catch(() => null)
+  if (!response.ok || !data) {
+    const details = Object.values(data?.fields ?? {}).join(' ')
+    throw new Error([data?.error ?? 'Could not reach the RouteWise API.', details].filter(Boolean).join(' '))
+  }
+  return data
+}

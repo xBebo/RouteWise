@@ -347,3 +347,24 @@ def test_out_of_range_sqlite_ids_return_bad_request(client, method, path, body):
 def test_app_rejects_in_memory_sqlite():
     with pytest.raises(ValueError, match="Use a SQLite file"):
         create_app({"DB_PATH": ":memory:"})
+def test_network_validation_uses_open_directed_roads(client):
+    ids = {}
+    for code, kind in [("D", "DEPOT"), ("A", "CUSTOMER"), ("B", "CUSTOMER")]:
+        response = client.post("/api/locations", json={
+            "code": code, "name": code, "kind": kind, "x": 0, "y": 0,
+        })
+        assert response.status_code == 201
+        ids[code] = response.json["location"]["id"]
+    for start, end, closed in [("D", "A", False), ("A", "B", True)]:
+        response = client.post("/api/roads", json={
+            "from_id": ids[start], "to_id": ids[end], "distance_km": 1,
+            "is_one_way": True, "is_closed": closed,
+        })
+        assert response.status_code == 201
+    assert client.get(f"/api/network/validation?depot_id={ids['A']}").status_code == 400
+    response = client.get(f"/api/network/validation?depot_id={ids['D']}")
+    assert response.status_code == 200
+    assert response.json == {
+        "isolated": [ids["B"]], "unreachable": [ids["B"]],
+        "reachable_count": 2, "is_fully_connected": False,
+    }
