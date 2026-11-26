@@ -13,6 +13,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from backend.api.network_routes import network_bp
+from backend.api.route_routes import route_bp
 from backend.database.connection import DB_PATH, initialize_database
 
 
@@ -28,6 +29,7 @@ def create_app(test_config: dict[str, Any] | None = None) -> Flask:
         raise ValueError("Use a SQLite file for DB_PATH; requests open separate connections.")
     initialize_database(app.config["DB_PATH"])
     app.register_blueprint(network_bp)
+    app.register_blueprint(route_bp)
 
     @app.after_request
     def add_cors_headers(response):
