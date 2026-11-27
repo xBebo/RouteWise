@@ -289,3 +289,122 @@ class RoadRepository:
                     (road_id,),
                 )
                 return cursor.rowcount > 0
+
+
+class RouteRepository:
+    """Data-access layer for ``routes`` and ``route_legs`` snapshots."""
+
+    def __init__(self, db_path: Path | str | None = None) -> None:
+        self._db_path = db_path
+
+    @staticmethod
+    def _fetch_legs(conn, route_id: int) -> list[dict[str, Any]]:
+        sql = (
+            "SELECT l.seq, l.from_id, fl.code AS from_code, fl.name AS from_name, "
+            "l.to_id, tl.code AS to_code, tl.name AS to_name, l.km, l.is_delivery_stop "
+            "FROM route_legs l "
+            "JOIN locations fl ON fl.id = l.from_id "
+            "JOIN locations tl ON tl.id = l.to_id "
+            "WHERE l.route_id = ? "
+            "ORDER BY l.seq ASC"
+        )
+        return [dict(row) for row in conn.execute(sql, (route_id,)).fetchall()]
+
+    @staticmethod
+    def _fetch_route(conn, route_id: int) -> dict[str, Any] | None:
+        sql = (
+            "SELECT r.id, r.created_at, r.mode, r.origin_id, "
+            "o.code AS origin_code, o.name AS origin_name, "
+            "r.total_km, r.avg_speed_kmh "
+            "FROM routes r "
+            "JOIN locations o ON o.id = r.origin_id "
+            "WHERE r.id = ?"
+        )
+        row = conn.execute(sql, (route_id,)).fetchone()
+        return dict(row) if row is not None else None
+
+    def create(
+        self,
+        *,
+        mode: str,
+        origin_id: int,
+        total_km: float,
+        avg_speed_kmh: float,
+        legs: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Atomically persist a planned route header and all its leg snapshots."""
+        with closing(get_connection(self._db_path)) as conn:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = conn.execute(
+                    "INSERT INTO routes (mode, origin_id, total_km, avg_speed_kmh) "
+                    "VALUES (?, ?, ?, ?)",
+                    (mode, origin_id, total_km, avg_speed_kmh),
+                )
+                route_id = cursor.lastrowid
+                if legs:
+                    conn.executemany(
+                        "INSERT INTO route_legs "
+                        "(route_id, seq, from_id, to_id, km, is_delivery_stop) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        [
+                            (
+                                route_id,
+                                leg["seq"],
+                                leg["from_id"],
+                                leg["to_id"],
+                                leg["km"],
+                                int(bool(leg["is_delivery_stop"])),
+                            )
+                            for leg in legs
+                        ],
+                    )
+                conn.execute("COMMIT")
+            except Exception:
+                conn.execute("ROLLBACK")
+                raise
+
+            route = self._fetch_route(conn, route_id)
+            assert route is not None
+            route["legs"] = self._fetch_legs(conn, route_id)
+            return route
+
+    def list_all(self) -> list[dict[str, Any]]:
+        """Return all saved routes (newest first) with their leg snapshots."""
+        routes_sql = (
+            "SELECT r.id, r.created_at, r.mode, r.origin_id, "
+            "o.code AS origin_code, o.name AS origin_name, "
+            "r.total_km, r.avg_speed_kmh "
+            "FROM routes r "
+            "JOIN locations o ON o.id = r.origin_id "
+            "ORDER BY r.id DESC"
+        )
+        legs_sql = (
+            "SELECT l.route_id, l.seq, l.from_id, fl.code AS from_code, fl.name AS from_name, "
+            "l.to_id, tl.code AS to_code, tl.name AS to_name, l.km, l.is_delivery_stop "
+            "FROM route_legs l "
+            "JOIN locations fl ON fl.id = l.from_id "
+            "JOIN locations tl ON tl.id = l.to_id "
+            "ORDER BY l.route_id DESC, l.seq ASC"
+        )
+        with closing(get_connection(self._db_path)) as conn:
+            routes = [dict(row) for row in conn.execute(routes_sql).fetchall()]
+            legs_by_route: dict[int, list[dict[str, Any]]] = {}
+            for leg_row in conn.execute(legs_sql).fetchall():
+                leg = dict(leg_row)
+                rid = leg.pop("route_id")
+                legs_by_route.setdefault(rid, []).append(leg)
+
+            for route in routes:
+                route["legs"] = legs_by_route.get(route["id"], [])
+            return routes
+
+    def get_by_id(self, route_id: int) -> dict[str, Any] | None:
+        """Return a single saved route with its leg snapshots, or None."""
+        with closing(get_connection(self._db_path)) as conn:
+            route = self._fetch_route(conn, route_id)
+            if route is None:
+                return None
+            route["legs"] = self._fetch_legs(conn, route_id)
+            return route
