@@ -3,10 +3,11 @@
 // (see vite.config.js), so the browser never needs Flask's address.
 
 export class ApiError extends Error {
-  constructor(message, status) {
+  constructor(message, status, body = null) {
     super(message)
     this.name = 'ApiError'
     this.status = status
+    this.body = body // Flask error JSON: { error, fields?, ...details }
   }
 }
 
@@ -43,6 +44,36 @@ export async function getNetwork(signal) {
   const [locations, roads] = await Promise.all([getLocations(signal), getRoads(signal)])
   return { locations, roads }
 }
+/** JSON request for the route endpoints; resolves to body.route / body.routes, throws ApiError. */
+async function requestRoute(path, { method = 'GET', body, signal } = {}) {
+  let response
+  try {
+    response = await fetch(`/api/${path}`, {
+      method,
+      signal,
+      headers: { Accept: 'application/json', ...(body && { 'Content-Type': 'application/json' }) },
+      ...(body && { body: JSON.stringify(body) }),
+    })
+  } catch (error) {
+    if (error.name === 'AbortError') throw error
+    throw new ApiError(UNREACHABLE)
+  }
+  const data = await response.json().catch(() => null)
+  if (!response.ok) {
+    const message = data?.error ?? (response.status >= 500 ? UNREACHABLE : `Request failed (${response.status}).`)
+    throw new ApiError(message, response.status, data)
+  }
+  const result = data?.route ?? data?.routes
+  if (!result) throw new ApiError(`Unexpected response from /api/${path}.`, response.status)
+  return result
+}
+
+export const planPointRoute = (body, signal) => requestRoute('routes/point', { method: 'POST', body, signal })
+export const planDeliveryRun = (body, signal) => requestRoute('routes/run', { method: 'POST', body, signal })
+export const saveRoute = (body) => requestRoute('routes', { method: 'POST', body })
+export const getRoutes = (signal) => requestRoute('routes', { signal })
+export const getRoute = (id, signal) => requestRoute(`routes/${id}`, { signal })
+
 export async function requestNetwork(path, method = 'GET', body) {
   const response = await fetch('/api/' + path, {
     method,

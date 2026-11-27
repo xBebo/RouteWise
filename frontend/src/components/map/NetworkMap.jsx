@@ -13,6 +13,7 @@ import {
   textBox,
 } from '../../lib/network.js'
 import { NodeGlyph } from '../NodeGlyph.jsx'
+import { routeMarkers, routeSummaryText } from '../../lib/route.js'
 
 const LABEL_ROOM = 640 // px of map width needed before every customer name is shown
 
@@ -44,15 +45,30 @@ function focusFor(index, selection) {
 const DISTANCE_CHAR = 6.1 // px per character of the 10px monospace distance text
 const LABEL_STOPS = [0.5, 0.35, 0.65] // where along a road its distance may go, in order of preference
 
+const MARKER_TONES = {
+  start: 'fill-slate-900',
+  end: 'fill-accent-700',
+  stop: 'fill-accent-600',
+}
+
 /**
  * SVG schematic of the network. Location x/y are projected into the measured
  * box (viewBox = pixel size), so glyphs and text keep a constant on-screen size.
- * Draw order: roads, then nodes, so roads never cover a location.
+ * Draw order: roads, route overlay, nodes, markers, so roads never cover a location.
+ *
+ * `route` (an API route result) draws its legs from location to location, so a
+ * saved route still shows even if a road was later closed, edited or deleted.
+ * Without `onSelect` the map is read-only: locations are not focusable buttons.
  */
-export function NetworkMap({ index, selection, onSelect, showDistances }) {
+export function NetworkMap({ index, selection = null, onSelect, showDistances = false, route = null }) {
   const [ref, { width, height }] = useElementSize()
   const markerId = useId().replace(/:/g, '')
-  const focus = focusFor(index, selection)
+  const interactive = Boolean(onSelect)
+  const routeDirections = new Set(route?.legs.map(({ from_id, to_id }) => `${from_id}:${to_id}`))
+  const routeIds = route && new Set(route.path)
+  const focus = routeIds ? { nodes: routeIds, roads: new Set(), named: routeIds } : focusFor(index, selection)
+  const roadDim = route ? 0.4 : 0.18 // keep the network readable under a route
+  const nodeDim = route ? 0.5 : 0.3
   const roomy = width >= LABEL_ROOM
 
   // 1. Project locations to pixels.
@@ -155,7 +171,11 @@ export function NetworkMap({ index, selection, onSelect, showDistances }) {
           height={height}
           viewBox={`0 0 ${width} ${height}`}
           role="group"
-          aria-label={`Network map with ${index.locations.length} locations and ${index.roads.length} roads. Locations are focusable; roads are listed in the details panel.`}
+          aria-label={
+            route
+              ? `Route map. ${routeSummaryText(route)}`
+              : `Network map with ${index.locations.length} locations and ${index.roads.length} roads. Locations are focusable; roads are listed in the details panel.`
+          }
           className="block touch-manipulation select-none"
         >
           <defs>
@@ -174,7 +194,7 @@ export function NetworkMap({ index, selection, onSelect, showDistances }) {
           </defs>
 
           {/* Empty canvas: click/tap clears the selection. */}
-          <rect width={width} height={height} fill="transparent" onClick={() => onSelect(null)} />
+          <rect width={width} height={height} fill="transparent" onClick={() => onSelect?.(null)} />
 
           {/* Roads (pointer targets; keyboard users reach roads via the details panel). */}
           <g aria-hidden="true">
@@ -196,11 +216,11 @@ export function NetworkMap({ index, selection, onSelect, showDistances }) {
                   data-road-id={road.id}
                   data-one-way={road.is_one_way || undefined}
                   data-closed={road.is_closed || undefined}
-                  className="group/road cursor-pointer"
-                  opacity={dim ? 0.18 : 1}
+                  className={interactive ? 'group/road cursor-pointer' : 'group/road'}
+                  opacity={dim ? roadDim : 1}
                   onClick={(event) => {
                     event.stopPropagation()
-                    onSelect({ type: 'road', id: road.id })
+                    onSelect?.({ type: 'road', id: road.id })
                   }}
                 >
                   <title>{describeRoad(index, road)}</title>
@@ -210,7 +230,7 @@ export function NetworkMap({ index, selection, onSelect, showDistances }) {
                     y1={g.y1}
                     x2={g.x2}
                     y2={g.y2}
-                    className={`${stroke} ${road.is_closed ? '' : 'group-hover/road:stroke-slate-800'}`}
+                    className={`${stroke} ${road.is_closed || !interactive ? '' : 'group-hover/road:stroke-slate-800'}`}
                     strokeWidth={selected ? 3.5 : active ? 2.75 : 1.75}
                     strokeDasharray={road.is_closed ? '6 4' : undefined}
                     strokeLinecap="round"
@@ -239,6 +259,58 @@ export function NetworkMap({ index, selection, onSelect, showDistances }) {
             })}
           </g>
 
+          {/* Route overlay: cased, heavier stroke with direction chevrons; start/end halos. */}
+          {route && (
+            <g aria-hidden="true" data-role="route" className="pointer-events-none">
+              {routeMarkers(route)
+                .filter((marker) => marker.tone !== 'stop')
+                .map((marker) => {
+                  const p = points.get(marker.id)
+                  const location = index.byId.get(marker.id)
+                  if (!p || !location) return null
+                  return (
+                    <circle
+                      key={`halo-${marker.id}`}
+                      cx={p.x}
+                      cy={p.y}
+                      r={kindMeta(location.kind).radius + 7}
+                      className="fill-accent-100 stroke-accent-600"
+                      strokeWidth={2}
+                    />
+                  )
+                })}
+              {route.legs.map((leg) => {
+                const a = points.get(leg.from_id)
+                const b = points.get(leg.to_id)
+                if (!a || !b) return null
+                const length = Math.hypot(b.x - a.x, b.y - a.y)
+                const angle = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI
+                const retraced = routeDirections.has(`${leg.to_id}:${leg.from_id}`)
+                // Offset each direction to its own side so both chevrons stay visible.
+                const offset = retraced && length > 0 ? 5 / length : 0
+                const dx = -(b.y - a.y) * offset
+                const dy = (b.x - a.x) * offset
+                return (
+                  <g key={leg.seq} data-route-leg={leg.seq}>
+                    <line x1={a.x + dx} y1={a.y + dy} x2={b.x + dx} y2={b.y + dy} className="stroke-white" strokeWidth={9} strokeLinecap="round" />
+                    <line x1={a.x + dx} y1={a.y + dy} x2={b.x + dx} y2={b.y + dy} className="stroke-accent-600" strokeWidth={5} strokeLinecap="round" />
+                    {length > (retraced ? 20 : 44) && (
+                      <path
+                        d="M-2.5 -3L1.5 0L-2.5 3"
+                        transform={`translate(${(a.x + b.x) / 2 + dx} ${(a.y + b.y) / 2 + dy}) rotate(${angle})`}
+                        fill="none"
+                        className="stroke-white"
+                        strokeWidth={1.8}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    )}
+                  </g>
+                )
+              })}
+            </g>
+          )}
+
           {/* Locations */}
           <g>
             {index.locations.map((location) => {
@@ -250,30 +322,32 @@ export function NetworkMap({ index, selection, onSelect, showDistances }) {
               const isolated = index.isolated.has(location.id)
               const roadCount = index.roadsByLocation.get(location.id).length
               const label = nodeLabels.get(location.id)
-              const select = () => onSelect({ type: 'location', id: location.id })
+              const select = () => onSelect?.({ type: 'location', id: location.id })
               return (
                 <g
                   key={location.id}
                   transform={`translate(${point.x} ${point.y})`}
-                  role="button"
-                  tabIndex={0}
-                  aria-pressed={selected}
-                  aria-label={`${meta.label}: ${location.name} (${location.code}), ${
-                    isolated ? 'isolated, no roads' : `${roadCount} ${roadCount === 1 ? 'road' : 'roads'}`
-                  }`}
+                  {...(interactive && {
+                    role: 'button',
+                    tabIndex: 0,
+                    'aria-pressed': selected,
+                    'aria-label': `${meta.label}: ${location.name} (${location.code}), ${
+                      isolated ? 'isolated, no roads' : `${roadCount} ${roadCount === 1 ? 'road' : 'roads'}`
+                    }`,
+                    onKeyDown: (event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault()
+                        select()
+                      }
+                    },
+                  })}
                   data-location-id={location.id}
                   data-kind={location.kind}
-                  className="group cursor-pointer outline-none"
-                  opacity={dim ? 0.3 : 1}
+                  className={`group outline-none ${interactive ? 'cursor-pointer' : ''}`}
+                  opacity={dim ? nodeDim : 1}
                   onClick={(event) => {
                     event.stopPropagation()
                     select()
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      select()
-                    }
                   }}
                 >
                   <title>{`${location.name} · ${location.code}`}</title>
@@ -347,6 +421,26 @@ export function NetworkMap({ index, selection, onSelect, showDistances }) {
               )
             })}
           </g>
+
+          {/* Route markers on top: S = start, E = end, 1..n = delivery stops in visiting order. */}
+          {route && (
+            <g aria-hidden="true" className="pointer-events-none" data-role="route-markers">
+              {routeMarkers(route).map((marker) => {
+                const p = points.get(marker.id)
+                const location = index.byId.get(marker.id)
+                if (!p || !location) return null
+                const r = kindMeta(location.kind).radius
+                return (
+                  <g key={`${marker.tone}-${marker.id}`} transform={`translate(${p.x + r + 3} ${p.y - r - 3})`} data-marker={marker.text}>
+                    <circle r={8.5} className={`${MARKER_TONES[marker.tone]} stroke-white`} strokeWidth={1.5} />
+                    <text textAnchor="middle" dominantBaseline="central" className="fill-white text-[10px] font-semibold tabular-nums">
+                      {marker.text}
+                    </text>
+                  </g>
+                )
+              })}
+            </g>
+          )}
         </svg>
       )}
     </div>
