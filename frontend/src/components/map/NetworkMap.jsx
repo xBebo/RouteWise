@@ -64,6 +64,7 @@ export function NetworkMap({ index, selection = null, onSelect, showDistances = 
   const [ref, { width, height }] = useElementSize()
   const markerId = useId().replace(/:/g, '')
   const interactive = Boolean(onSelect)
+  const routeDirections = new Set(route?.legs.map(({ from_id, to_id }) => `${from_id}:${to_id}`))
   const routeIds = route && new Set(route.path)
   const focus = routeIds ? { nodes: routeIds, roads: new Set(), named: routeIds } : focusFor(index, selection)
   const roadDim = route ? 0.4 : 0.18 // keep the network readable under a route
@@ -284,14 +285,19 @@ export function NetworkMap({ index, selection = null, onSelect, showDistances = 
                 if (!a || !b) return null
                 const length = Math.hypot(b.x - a.x, b.y - a.y)
                 const angle = (Math.atan2(b.y - a.y, b.x - a.x) * 180) / Math.PI
+                const retraced = routeDirections.has(`${leg.to_id}:${leg.from_id}`)
+                // Offset each direction to its own side so both chevrons stay visible.
+                const offset = retraced && length > 0 ? 5 / length : 0
+                const dx = -(b.y - a.y) * offset
+                const dy = (b.x - a.x) * offset
                 return (
                   <g key={leg.seq} data-route-leg={leg.seq}>
-                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} className="stroke-white" strokeWidth={9} strokeLinecap="round" />
-                    <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} className="stroke-accent-600" strokeWidth={5} strokeLinecap="round" />
-                    {length > 44 && (
+                    <line x1={a.x + dx} y1={a.y + dy} x2={b.x + dx} y2={b.y + dy} className="stroke-white" strokeWidth={9} strokeLinecap="round" />
+                    <line x1={a.x + dx} y1={a.y + dy} x2={b.x + dx} y2={b.y + dy} className="stroke-accent-600" strokeWidth={5} strokeLinecap="round" />
+                    {length > (retraced ? 20 : 44) && (
                       <path
                         d="M-2.5 -3L1.5 0L-2.5 3"
-                        transform={`translate(${(a.x + b.x) / 2} ${(a.y + b.y) / 2}) rotate(${angle})`}
+                        transform={`translate(${(a.x + b.x) / 2 + dx} ${(a.y + b.y) / 2 + dy}) rotate(${angle})`}
                         fill="none"
                         className="stroke-white"
                         strokeWidth={1.8}
