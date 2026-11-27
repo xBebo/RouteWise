@@ -1,4 +1,4 @@
-"""Flask REST endpoints for managing locations and roads."""
+"""Flask REST endpoints for managing locations, roads, and network validation."""
 
 from typing import Any
 
@@ -6,27 +6,19 @@ from flask import Blueprint, current_app, jsonify, request
 
 from backend.algorithms.graph import build_graph
 from backend.algorithms.network_validation import validate_network
-from backend.database.connection import MAX_SQLITE_ID
-from backend.services.network_service import (
-    ConflictError,
-    NetworkService,
-    NotFoundError,
-    ServiceError,
-    ValidationError,
+from backend.api.common import (
+    parse_json_object,
+    register_error_handlers,
+    validate_id,
 )
+from backend.services.network_service import NetworkService, ValidationError
 
 network_bp = Blueprint("network", __name__, url_prefix="/api")
+register_error_handlers(network_bp)
 
 
 def _get_service() -> NetworkService:
     return NetworkService(db_path=current_app.config.get("DB_PATH"))
-
-
-def _parse_json_object() -> dict[str, Any]:
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, dict):
-        raise ValidationError("Request body must be a valid JSON object.")
-    return payload
 
 
 def _parse_optional_int_param(name: str) -> int | None:
@@ -40,16 +32,7 @@ def _parse_optional_int_param(name: str) -> int | None:
             f"Query parameter '{name}' must be an integer.",
             fields={name: "Must be a positive integer."},
         ) from exc
-    return _validate_id(value, name)
-
-
-def _validate_id(value: int, name: str) -> int:
-    if not 1 <= value <= MAX_SQLITE_ID:
-        raise ValidationError(
-            f"'{name}' must be a positive SQLite integer.",
-            fields={name: "Must be a positive integer."},
-        )
-    return value
+    return validate_id(value, name)
 
 
 def _parse_optional_bool_param(name: str) -> int | None:
@@ -89,28 +72,6 @@ def _serialize_road(road: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _error_response(error: ServiceError, status_code: int):
-    body: dict[str, Any] = {"error": error.message}
-    if error.fields:
-        body["fields"] = error.fields
-    return jsonify(body), status_code
-
-
-@network_bp.errorhandler(ValidationError)
-def handle_validation_error(error: ValidationError):
-    return _error_response(error, 400)
-
-
-@network_bp.errorhandler(NotFoundError)
-def handle_not_found_error(error: NotFoundError):
-    return _error_response(error, 404)
-
-
-@network_bp.errorhandler(ConflictError)
-def handle_conflict_error(error: ConflictError):
-    return _error_response(error, 409)
-
-
 @network_bp.get("/health")
 def health_check():
     return jsonify({"status": "ok"}), 200
@@ -129,22 +90,22 @@ def list_locations():
 
 @network_bp.post("/locations")
 def create_location():
-    payload = _parse_json_object()
+    payload = parse_json_object()
     created = _get_service().create_location(payload)
     return jsonify({"location": _serialize_location(created)}), 201
 
 
 @network_bp.patch("/locations/<int:location_id>")
 def update_location(location_id: int):
-    _validate_id(location_id, "location_id")
-    payload = _parse_json_object()
+    validate_id(location_id, "location_id")
+    payload = parse_json_object()
     updated = _get_service().update_location(location_id, payload)
     return jsonify({"location": _serialize_location(updated)}), 200
 
 
 @network_bp.delete("/locations/<int:location_id>")
 def delete_location(location_id: int):
-    _validate_id(location_id, "location_id")
+    validate_id(location_id, "location_id")
     _get_service().delete_location(location_id)
     return jsonify({"deleted": True, "id": location_id}), 200
 
@@ -165,22 +126,22 @@ def list_roads():
 
 @network_bp.post("/roads")
 def create_road():
-    payload = _parse_json_object()
+    payload = parse_json_object()
     created = _get_service().create_road(payload)
     return jsonify({"road": _serialize_road(created)}), 201
 
 
 @network_bp.patch("/roads/<int:road_id>")
 def update_road(road_id: int):
-    _validate_id(road_id, "road_id")
-    payload = _parse_json_object()
+    validate_id(road_id, "road_id")
+    payload = parse_json_object()
     updated = _get_service().update_road(road_id, payload)
     return jsonify({"road": _serialize_road(updated)}), 200
 
 
 @network_bp.delete("/roads/<int:road_id>")
 def delete_road(road_id: int):
-    _validate_id(road_id, "road_id")
+    validate_id(road_id, "road_id")
     _get_service().delete_road(road_id)
     return jsonify({"deleted": True, "id": road_id}), 200
 
@@ -191,5 +152,10 @@ def network_validation():
     service = _get_service()
     locations = service.list_locations()
     if not any(loc["id"] == depot_id and loc["kind"] == "DEPOT" for loc in locations):
-        raise ValidationError("Select an existing depot.", fields={"depot_id": "Select an existing depot."})
-    return jsonify(validate_network(build_graph(locations, service.list_roads()), depot_id))
+        raise ValidationError(
+            "Select an existing depot.",
+            fields={"depot_id": "Select an existing depot."},
+        )
+    return jsonify(
+        validate_network(build_graph(locations, service.list_roads()), depot_id)
+    )
