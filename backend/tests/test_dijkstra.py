@@ -171,3 +171,47 @@ def test_single_source_dijkstra_returns_distances_and_predecessors():
     assert distances == {1: 0.0, 2: 4.0, 3: 5.0, 4: 10.0}
     assert reconstruct_path(predecessors, 1, 4) == [1, 2, 4]
     assert reconstruct_path(predecessors, 1, 99) == []
+
+
+def test_preserves_very_small_positive_distance():
+    graph = build_graph(
+        [_loc(1, "DEPOT"), _loc(2, "CUST_1")],
+        [_road(1, 2, 1e-11, one_way=1)],
+    )
+
+    result = shortest_path(graph, 1, 2)
+
+    assert result["found"] is True
+    assert result["path"] == [1, 2]
+    assert result["total_distance_km"] == 1e-11
+    assert result["total_distance_km"] > 0.0
+
+
+def test_target_limited_dijkstra_returns_only_settled_nodes():
+    locations = [_loc(1, "SRC"), _loc(2, "TARGET"), _loc(3, "FAR"), _loc(4, "BEYOND")]
+    roads = [
+        _road(1, 2, 2.0, one_way=1),
+        _road(1, 3, 5.0, one_way=1),
+        _road(3, 4, 1.0, one_way=1),
+    ]
+    graph = build_graph(locations, roads)
+
+    distances, predecessors = dijkstra(graph, 1, target=2)
+
+    assert distances == {1: 0.0, 2: 2.0}
+    assert predecessors == {1: None, 2: 1}
+    assert 3 not in distances
+    assert 3 not in predecessors
+    assert set(distances.keys()) == set(predecessors.keys())
+
+    # Full single-source search remains unchanged when target is omitted.
+    full_distances, full_predecessors = dijkstra(graph, 1)
+    assert full_distances == {1: 0.0, 2: 2.0, 3: 5.0, 4: 6.0}
+    assert full_predecessors == {1: None, 2: 1, 3: 1, 4: 3}
+
+    # shortest_path continues to work with target-limited results.
+    assert shortest_path(graph, 1, 2) == {
+        "found": True,
+        "total_distance_km": 2.0,
+        "path": [1, 2],
+    }

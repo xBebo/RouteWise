@@ -103,7 +103,7 @@ def plan_route(
             {
                 "from_id": current,
                 "to_id": next_stop,
-                "distance_km": round(leg_distance, 10),
+                "distance_km": leg_distance,
                 "path": leg_path,
             }
         )
@@ -140,7 +140,7 @@ def plan_route(
     return {
         "ordered_stops": ordered_stops,
         "legs": legs,
-        "total_distance_km": round(total_distance, 10),
+        "total_distance_km": total_distance,
         "unreachable_stops": unreachable_stops,
         "returned_to_depot": returned_to_depot,
         "method": "heuristic",

@@ -188,3 +188,36 @@ def test_duplicate_stops_and_stop_equal_to_depot():
     # Only the depot in stops leaves 0 delivery stops -> rejected clearly.
     with pytest.raises(ValueError):
         plan_route(graph, depot=1, stops=[1, 1])
+
+
+def test_preserves_very_small_positive_distances():
+    graph = build_graph(
+        [_loc(1, "DEPOT"), _loc(2, "CUST_1")],
+        [_road(1, 2, 1e-11, one_way=1)],
+    )
+
+    result = plan_route(graph, depot=1, stops=[2], return_to_depot=False)
+
+    assert result["ordered_stops"] == [2]
+    assert len(result["legs"]) == 1
+    assert result["legs"][0]["distance_km"] == 1e-11
+    assert result["legs"][0]["distance_km"] > 0.0
+    assert result["total_distance_km"] == 1e-11
+    assert result["total_distance_km"] > 0.0
+
+
+def test_return_to_depot_preserves_very_small_positive_distance():
+    graph = build_graph(
+        [_loc(1, "DEPOT"), _loc(2, "CUST_1")],
+        [_road(1, 2, 1e-11)],
+    )
+
+    result = plan_route(graph, depot=1, stops=[2], return_to_depot=True)
+
+    assert result["returned_to_depot"] is True
+    assert len(result["legs"]) == 2
+    assert result["legs"][0]["distance_km"] == 1e-11
+    assert result["legs"][1]["distance_km"] == 1e-11
+    assert result["legs"][1]["distance_km"] > 0.0
+    assert result["total_distance_km"] == 1e-11 + 1e-11
+    assert result["total_distance_km"] > 0.0
