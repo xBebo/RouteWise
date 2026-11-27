@@ -58,6 +58,36 @@ def _require_positive_speed(
     return speed
 
 
+def _compute_eta(total_km: float, avg_speed_kmh: float) -> tuple[float, float]:
+    """Compute rounded ETA values or raise field-level ValidationError on overflow."""
+    try:
+        raw_hours = total_km / avg_speed_kmh
+        raw_minutes = raw_hours * 60.0
+        if not (math.isfinite(raw_hours) and math.isfinite(raw_minutes)):
+            raise OverflowError("non-finite ETA")
+        eta_hours = round(raw_hours, 4)
+        eta_minutes = round(raw_minutes, 2)
+    except OverflowError as exc:
+        raise ValidationError(
+            "Estimated travel time is out of numeric range for the given speed.",
+            fields={
+                "avg_speed_kmh": (
+                    "avg_speed_kmh is too small for the route distance (ETA is not finite)."
+                )
+            },
+        ) from exc
+    if not (math.isfinite(eta_hours) and math.isfinite(eta_minutes)):
+        raise ValidationError(
+            "Estimated travel time is out of numeric range for the given speed.",
+            fields={
+                "avg_speed_kmh": (
+                    "avg_speed_kmh is too small for the route distance (ETA is not finite)."
+                )
+            },
+        )
+    return eta_hours, eta_minutes
+
+
 def _edge_distance(graph: Graph, u: int, v: int) -> float:
     for neighbor, weight in get_neighbors(graph, u):
         if neighbor == v:
@@ -73,8 +103,8 @@ def _enrich_legs(
     cumulative = 0.0
     enriched: list[dict[str, Any]] = []
     for seq, step in enumerate(raw_steps, start=1):
-        km = round(float(step["km"]), 10)
-        cumulative = round(cumulative + km, 10)
+        km = float(step["km"])
+        cumulative = cumulative + km
         origin = loc_by_id[step["from_id"]]
         dest = loc_by_id[step["to_id"]]
         enriched.append(
@@ -91,7 +121,7 @@ def _enrich_legs(
                 "is_delivery_stop": bool(step["is_delivery_stop"]),
             }
         )
-    return enriched, round(cumulative, 10)
+    return enriched, cumulative
 
 
 def _format_route_payload(
@@ -103,16 +133,18 @@ def _format_route_payload(
     total_km: float,
     avg_speed_kmh: float,
     legs: list[dict[str, Any]],
+    eta_hours: float | None = None,
+    eta_minutes: float | None = None,
     unreachable_stops: list[int] | None = None,
     returned_to_depot: bool = False,
     warnings: list[str] | None = None,
 ) -> dict[str, Any]:
-    eta_hours = round(total_km / avg_speed_kmh, 4)
-    eta_minutes = round((total_km / avg_speed_kmh) * 60.0, 2)
+    if eta_hours is None or eta_minutes is None:
+        eta_hours, eta_minutes = _compute_eta(total_km, avg_speed_kmh)
     path = [origin["id"]] + [leg["to_id"] for leg in legs]
     ordered_stops = [leg["to_id"] for leg in legs if leg["is_delivery_stop"]]
 
-    return {
+    payload: dict[str, Any] = {
         "id": route_id,
         "created_at": created_at,
         "mode": mode,
@@ -120,19 +152,21 @@ def _format_route_payload(
         "origin_code": origin["code"],
         "origin_name": origin["name"],
         "destination_id": path[-1],
-        "total_km": round(float(total_km), 10),
+        "total_km": float(total_km),
         "avg_speed_kmh": float(avg_speed_kmh),
         "eta_minutes": eta_minutes,
         "eta_hours": eta_hours,
         "path": path,
         "ordered_stops": ordered_stops,
-        "unreachable_stops": list(unreachable_stops or []),
         "returned_to_depot": bool(returned_to_depot),
         "method": "optimal" if mode == "POINT" else "heuristic",
         "label": OPTIMAL_LABEL if mode == "POINT" else HEURISTIC_LABEL,
         "warnings": list(warnings or []),
         "legs": legs,
     }
+    if unreachable_stops is not None:
+        payload["unreachable_stops"] = list(unreachable_stops)
+    return payload
 
 
 def _hydrate_saved_route(saved: dict[str, Any]) -> dict[str, Any]:
@@ -140,8 +174,8 @@ def _hydrate_saved_route(saved: dict[str, Any]) -> dict[str, Any]:
     cumulative = 0.0
     legs: list[dict[str, Any]] = []
     for leg in saved["legs"]:
-        km = round(float(leg["km"]), 10)
-        cumulative = round(cumulative + km, 10)
+        km = float(leg["km"])
+        cumulative = cumulative + km
         legs.append(
             {
                 "seq": leg["seq"],
@@ -261,6 +295,7 @@ class RouteService:
             for u, v in zip(path, path[1:])
         ]
         legs, total_km = _enrich_legs(raw_steps, loc_by_id)
+        eta_hours, eta_minutes = _compute_eta(total_km, speed)
 
         if save_flag:
             saved = self._routes.create(
@@ -280,6 +315,9 @@ class RouteService:
             total_km=total_km,
             avg_speed_kmh=speed,
             legs=legs,
+            eta_hours=eta_hours,
+            eta_minutes=eta_minutes,
+            unreachable_stops=[],
         )
 
     def plan_delivery_run(
@@ -393,6 +431,7 @@ class RouteService:
                 )
 
         legs, total_km = _enrich_legs(raw_steps, loc_by_id)
+        eta_hours, eta_minutes = _compute_eta(total_km, speed)
 
         if save_flag:
             saved = self._routes.create(
@@ -415,6 +454,8 @@ class RouteService:
             total_km=total_km,
             avg_speed_kmh=speed,
             legs=legs,
+            eta_hours=eta_hours,
+            eta_minutes=eta_minutes,
             unreachable_stops=run_result["unreachable_stops"],
             returned_to_depot=returned_to_depot,
             warnings=run_result["warnings"],

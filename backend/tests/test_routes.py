@@ -420,3 +420,155 @@ def test_route_save_rolls_back_atomically_on_leg_insert_failure(worked_network, 
     with closing(sqlite3.connect(db_path)) as conn:
         assert conn.execute("SELECT COUNT(*) FROM routes").fetchone()[0] == 0
         assert conn.execute("SELECT COUNT(*) FROM route_legs").fetchone()[0] == 0
+
+
+def test_tiny_positive_distance_preserves_precision_across_preview_save_and_reload(client):
+    depot = client.post(
+        "/api/locations",
+        json={"code": "TINY_D", "name": "Tiny Depot", "kind": "DEPOT", "x": 10, "y": 10},
+    ).get_json()["location"]
+    cust = client.post(
+        "/api/locations",
+        json={"code": "TINY_C", "name": "Tiny Customer", "kind": "CUSTOMER", "x": 20, "y": 20},
+    ).get_json()["location"]
+
+    tiny_km = 1e-11
+    road_resp = client.post(
+        "/api/roads",
+        json={
+            "from_id": depot["id"],
+            "to_id": cust["id"],
+            "distance_km": tiny_km,
+            "is_one_way": False,
+            "is_closed": False,
+        },
+    )
+    assert road_resp.status_code == 201
+
+    # Point-to-point preview must preserve positive 1e-11 precision.
+    preview_resp = client.post(
+        "/api/routes/point",
+        json={
+            "origin_id": depot["id"],
+            "destination_id": cust["id"],
+            "avg_speed_kmh": 1.0,
+        },
+    )
+    assert preview_resp.status_code == 200
+    preview = preview_resp.get_json()["route"]
+    assert preview["total_km"] == pytest.approx(tiny_km)
+    assert preview["legs"][0]["km"] == pytest.approx(tiny_km)
+    assert preview["legs"][0]["cumulative_km"] == pytest.approx(tiny_km)
+
+    # Save and reload via detail and history endpoints without losing precision.
+    save_resp = client.post(
+        "/api/routes/point",
+        json={
+            "origin_id": depot["id"],
+            "destination_id": cust["id"],
+            "avg_speed_kmh": 1.0,
+            "save": True,
+        },
+    )
+    assert save_resp.status_code == 201
+    saved = save_resp.get_json()["route"]
+    assert saved["total_km"] == pytest.approx(tiny_km)
+    assert saved["legs"][0]["km"] == pytest.approx(tiny_km)
+
+    detail = client.get(f"/api/routes/{saved['id']}").get_json()["route"]
+    assert detail["total_km"] == pytest.approx(tiny_km)
+    assert detail["legs"][0]["km"] == pytest.approx(tiny_km)
+    assert detail["legs"][0]["cumulative_km"] == pytest.approx(tiny_km)
+
+    # Multi-stop run preview & save with 1e-11 road.
+    run_save = client.post(
+        "/api/routes/run",
+        json={
+            "depot_id": depot["id"],
+            "stop_ids": [cust["id"]],
+            "avg_speed_kmh": 1.0,
+            "save": True,
+        },
+    )
+    assert run_save.status_code == 201
+    run_route = run_save.get_json()["route"]
+    assert run_route["total_km"] == pytest.approx(tiny_km)
+    assert run_route["legs"][0]["km"] == pytest.approx(tiny_km)
+
+
+def test_non_finite_eta_rejected_with_field_400_before_any_write(worked_network, db_path):
+    client = worked_network["client"]
+    locs = worked_network["locations"]
+
+    # 3 km road (OW_SRC -> OW_DST) at 1e-310 km/h would produce Infinity ETA.
+    for endpoint, payload in [
+        (
+            "/api/routes/point",
+            {
+                "origin_id": locs["OW_SRC"]["id"],
+                "destination_id": locs["OW_DST"]["id"],
+                "avg_speed_kmh": 1e-310,
+                "save": False,
+            },
+        ),
+        (
+            "/api/routes/point",
+            {
+                "origin_id": locs["OW_SRC"]["id"],
+                "destination_id": locs["OW_DST"]["id"],
+                "avg_speed_kmh": 1e-310,
+                "save": True,
+            },
+        ),
+        (
+            "/api/routes",
+            {
+                "mode": "POINT",
+                "origin_id": locs["OW_SRC"]["id"],
+                "destination_id": locs["OW_DST"]["id"],
+                "avg_speed_kmh": 1e-310,
+            },
+        ),
+        (
+            "/api/routes/run",
+            {
+                "depot_id": locs["D"]["id"],
+                "stop_ids": [locs["B"]["id"]],
+                "avg_speed_kmh": 1e-310,
+                "save": True,
+            },
+        ),
+    ]:
+        resp = client.post(endpoint, json=payload)
+        assert resp.status_code == 400
+        body = resp.get_json()
+        assert "avg_speed_kmh" in body.get("fields", {})
+
+    with closing(sqlite3.connect(db_path)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM routes").fetchone()[0] == 0
+        assert conn.execute("SELECT COUNT(*) FROM route_legs").fetchone()[0] == 0
+
+
+def test_skipped_stops_omitted_on_reload_when_not_persisted(worked_network):
+    client = worked_network["client"]
+    locs = worked_network["locations"]
+
+    save_resp = client.post(
+        "/api/routes",
+        json={
+            "mode": "RUN",
+            "depot_id": locs["D"]["id"],
+            "stop_ids": [locs["B"]["id"], locs["ISOLATED"]["id"]],
+            "avg_speed_kmh": 40.0,
+        },
+    )
+    assert save_resp.status_code == 201
+    saved = save_resp.get_json()["route"]
+    assert saved["unreachable_stops"] == [locs["ISOLATED"]["id"]]
+
+    detail = client.get(f"/api/routes/{saved['id']}").get_json()["route"]
+    assert "unreachable_stops" not in detail
+
+    history = client.get("/api/routes").get_json()["routes"]
+    assert len(history) == 1
+    assert "unreachable_stops" not in history[0]
