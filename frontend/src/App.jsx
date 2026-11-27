@@ -8,13 +8,21 @@ import { buildIndex } from './lib/network.js'
 import { NetworkValidation } from './components/NetworkValidation.jsx'
 import { DirectoryPage } from './pages/DirectoryPage.jsx'
 import { NetworkMapPage } from './pages/NetworkMapPage.jsx'
+import { RouteHistoryPage } from './pages/RouteHistoryPage.jsx'
+import { RoutePlannerPage } from './pages/RoutePlannerPage.jsx'
 
-const TITLES = { map: 'Network Map', directory: 'Locations & Roads' }
+const TITLES = {
+  map: 'Network Map',
+  directory: 'Locations & Roads',
+  planner: 'Route Planner',
+  history: 'Route History',
+}
 
 export default function App() {
   // One request for both datasets, shared by every screen.
   const network = useNetwork()
   const route = useHashRoute()
+  const [page, routeParam] = route.split('/') // 'history/12' -> ['history', '12']
   const [selection, setSelection] = useState(null) // { type: 'location' | 'road', id } | null
 
   const index = useMemo(
@@ -38,18 +46,22 @@ export default function App() {
   if (index) {
     // Keep showing the last good data while a reload is in flight.
     content =
-      route === 'map' ? (
+      page === 'map' ? (
         <>
           <NetworkValidation index={index} />
           <NetworkMapPage index={index} selection={selection} onSelect={setSelection} />
         </>
+      ) : page === 'planner' ? (
+        <RoutePlannerPage index={index} />
+      ) : page === 'history' ? (
+        <RouteHistoryPage index={index} routeId={routeParam ? Number(routeParam) : null} />
       ) : (
         <DirectoryPage index={index} onShowOnMap={showOnMap} onChanged={network.retry} />
       )
   } else {
     content = (
       <div className="flex-1">
-        <PageHeader title={TITLES[route]} />
+        <PageHeader title={TITLES[page]} />
         {network.status === 'error' ? (
           <StatusMessage tone="error" title="Couldn’t load the delivery network" onRetry={network.retry}>
             {network.error?.message}
@@ -65,7 +77,7 @@ export default function App() {
 
   return (
     <AppShell
-      route={route}
+      route={page}
       status={network.status}
       counts={index && { locations: index.locations.length, roads: index.roads.length }}
       onReload={network.retry}

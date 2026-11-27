@@ -7,6 +7,7 @@ const NAV_ITEMS = [
   {
     route: 'map',
     label: 'Network Map',
+    short: 'Map',
     icon: (
       <path
         d="M4 13l5-8 6 6M4 13h0M9 5h0M15 11h0"
@@ -26,6 +27,7 @@ const NAV_ITEMS = [
   {
     route: 'directory',
     label: 'Locations & Roads',
+    short: 'Directory',
     icon: (
       <path
         d="M3 5h14M3 10h14M3 15h14"
@@ -33,6 +35,40 @@ const NAV_ITEMS = [
         stroke="currentColor"
         strokeWidth="1.6"
         strokeLinecap="round"
+      />
+    ),
+    dots: [],
+  },
+  {
+    route: 'planner',
+    label: 'Route Planner',
+    short: 'Planner',
+    icon: (
+      <path
+        d="M4 15c3 0 3-5 6-5s3-5 6-5"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.2"
+        strokeLinecap="round"
+      />
+    ),
+    dots: [
+      [4, 15],
+      [16, 5],
+    ],
+  },
+  {
+    route: 'history',
+    label: 'Route History',
+    short: 'History',
+    icon: (
+      <path
+        d="M10 3.5a6.5 6.5 0 1 1-6.5 6.5M10 6.5V10l2.5 2"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
       />
     ),
     dots: [],
@@ -185,7 +221,7 @@ export function AppShell({ route, status, counts, onReload, children }) {
           </div>
         </div>
         <nav aria-label="Primary" className="px-4 pb-2.5">
-          <ul className="grid grid-cols-2 gap-1 rounded-lg bg-stone-100 p-1">
+          <ul className="grid grid-cols-4 gap-1 rounded-lg bg-stone-100 p-1">
             {NAV_ITEMS.map((item) => {
               const active = item.route === route
               return (
@@ -193,12 +229,13 @@ export function AppShell({ route, status, counts, onReload, children }) {
                   <a
                     href={hrefFor(item.route)}
                     aria-current={active ? 'page' : undefined}
-                    className={`flex h-9 items-center justify-center gap-2 rounded-md text-sm font-medium ${
+                    aria-label={item.label}
+                    className={`flex h-11 flex-col items-center justify-center gap-0.5 rounded-md text-[11px] font-medium ${
                       active ? 'bg-white text-accent-700 shadow-sm ring-1 ring-stone-200' : 'text-slate-600'
                     }`}
                   >
                     <NavIcon item={item} />
-                    {item.label}
+                    {item.short}
                   </a>
                 </li>
               )
@@ -207,7 +244,7 @@ export function AppShell({ route, status, counts, onReload, children }) {
         </nav>
       </header>
 
-      <main id="main" tabIndex={-1} className="flex min-h-[calc(100dvh-105px)] flex-col focus:outline-none lg:ml-60 lg:h-dvh lg:min-h-0 lg:overflow-y-auto">
+      <main id="main" tabIndex={-1} className="flex min-h-[calc(100dvh-113px)] flex-col focus:outline-none lg:ml-60 lg:h-dvh lg:min-h-0 lg:overflow-y-auto">
         {children}
       </main>
     </div>
