@@ -39,7 +39,10 @@ def dijkstra(
     Equal-distance candidates are broken using ``location_sort_key`` (lower
     location code first, defaulting to location id when ``codes`` is omitted).
 
-    If ``target`` is provided, search stops once ``target`` is settled.
+    If ``target`` is provided, search stops early as soon as ``target`` is
+    settled and only settled nodes are returned in ``distances`` and
+    ``predecessors`` (tentative distances for unsettled nodes are excluded).
+    When ``target`` is ``None``, a full single-source search is run.
     Returns ``(distances, predecessors)``; both dicts are empty if ``source``
     is not present in ``graph``.
     """
@@ -83,6 +86,14 @@ def dijkstra(
                     < location_sort_key(existing_pred, codes)
                 ):
                     predecessors[neighbor] = current_node
+
+    if target is not None:
+        distances = {
+            node: dist for node, dist in distances.items() if node in settled
+        }
+        predecessors = {
+            node: pred for node, pred in predecessors.items() if node in settled
+        }
 
     return distances, predecessors
 
@@ -166,6 +177,6 @@ def shortest_path(
 
     return {
         "found": True,
-        "total_distance_km": round(distances[target], 10),
+        "total_distance_km": distances[target],
         "path": path,
     }
